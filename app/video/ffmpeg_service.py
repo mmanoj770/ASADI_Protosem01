@@ -74,7 +74,14 @@ def cut_clip(
     """
     Cut video segment from start_sec to end_sec.
     If vertical_crop is True, crops video to 9:16 portrait ratio (1080x1920).
+    Uses PySceneDetect to align cuts to visual boundaries.
     """
+    try:
+        from app.video.scene_service import adjust_clip_to_scene_boundaries
+        start_sec, end_sec = adjust_clip_to_scene_boundaries(video_path, start_sec, end_sec)
+    except Exception as e:
+        print(f"[Warning] Scene adjustment skipped: {e}")
+
     os.makedirs(os.path.dirname(output_clip_path), exist_ok=True)
     duration = max(0.5, end_sec - start_sec)
     

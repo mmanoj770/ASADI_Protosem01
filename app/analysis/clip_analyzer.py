@@ -192,28 +192,47 @@ def analyze_transcript_for_clips(
 ) -> List[ClipCandidate]:
     """
     Main clip analysis workflow:
-    1. Try local Ollama analysis.
-    2. Validate & parse response.
-    3. Fallback to heuristics if Ollama is offline or returns invalid JSON.
+    1. Try local Ollama analysis using LangChain Tool Calling.
+    2. Fallback to heuristics if Ollama is offline or returns invalid JSON.
     """
     is_running, _, _ = check_ollama_status()
     
     if is_running:
         try:
-            prompt = build_clip_analysis_prompt(timestamped_transcript_str)
-            raw_response = generate_ollama_completion(
-                prompt=prompt,
-                system_prompt=SYSTEM_PROMPT,
-                model_name=model_name
+            from langchain_ollama import ChatOllama
+            from langchain_core.prompts import ChatPromptTemplate
+            from app.config import OLLAMA_BASE_URL
+
+            # Setup LangChain ChatOllama with Tool Calling
+            llm = ChatOllama(
+                model=model_name or "llama3.2",
+                base_url=OLLAMA_BASE_URL,
+                temperature=0.2,
             )
-            clips = parse_llm_clip_response(raw_response)
-            if clips:
+            structured_llm = llm.with_structured_output(ClipAnalysisResponse)
+
+            prompt = ChatPromptTemplate.from_messages([
+                ("system", SYSTEM_PROMPT),
+                ("user", "Analyze the following timestamped transcript and extract the top 3-8 best YouTube Shorts / TikTok clip recommendations.\n\nTIMESTAMPED TRANSCRIPT:\n{transcript}\n\nRespond strictly with valid JSON conforming to the schema.")
+            ])
+
+            chain = prompt | structured_llm
+            response = chain.invoke({"transcript": timestamped_transcript_str})
+
+            if response and response.clips:
+                clips = response.clips
+                # Post-process timestamps
+                for c in clips:
+                    c.start_sec = timestamp_to_seconds(c.start_time)
+                    c.end_sec = timestamp_to_seconds(c.end_time)
+                    c.duration = round(max(0.0, c.end_sec - c.start_sec), 1)
+
                 # Deduplicate and sort
                 clips.sort(key=lambda c: c.score, reverse=True)
                 attach_snippets_to_clips(clips, segments)
                 return clips
         except Exception as e:
-            print(f"[Warning] Ollama clip analysis failed: {e}. Falling back to heuristics.")
+            print(f"[Warning] Ollama LangChain clip analysis failed: {e}. Falling back to heuristics.")
 
     # Fallback if Ollama unavailable or parsing returned 0 clips
     clips = fallback_heuristic_analyzer(segments)
